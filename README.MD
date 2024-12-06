@@ -1,5 +1,5 @@
 # Patch APK
-Simple bash script to patch the Tapped Out with new server urls.
+Simple bash script to patch the Tapped Out APK with new server urls.
 
 ## Requirements
 - A Tapped Out APK
