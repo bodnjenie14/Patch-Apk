@@ -1,5 +1,5 @@
 # Patch APK
-Simple scripts to patch the Tapped Out APK with new server urls.
+Simple scripts to patch the Tapped Out APK with new server urls. All credit to tehfens for the patch_native.py script.
 
 ## Linux
 
@@ -10,22 +10,9 @@ Simple scripts to patch the Tapped Out APK with new server urls.
 - Python3-venv
 - Python3-pip
 - openjdk-11-jre
+- Radare2 (https://rada.re/n/radare2.html)
 
 ### Usage
 ```
 ./patch-apk.sh APK_TO_PATCH NEW_GAMESERVER_URL NEW_DLCSERVER_URL
-```
-
-## Windows
-~~The windows version is very slow. I recommend you use the linux version, which you can use on windows with git bash (https://git-scm.com/).~~
-The windows version doesn't work. If someone could fix it, it would be very appreciated :)
-
-### Requirements
-- A Tapped Out APK
-- Python3 And Pip (https://python.org/)
-- Java JRE or JDK
-
-### Usage
-```
-.\patch-apk.bat APK_TO_PATCH NEW_GAMESERVER_URL NEW_DLCSERVER_URL
 ```
