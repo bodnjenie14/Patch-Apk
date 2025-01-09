@@ -1,7 +1,8 @@
-# Patch APK Scripts
+# Patch APK
+Simple scripts to patch the Tapped Out APK with new server urls. All credit to tehfens for the patch_native.py script.
 
 ## Overview
-This document provides instructions for two different scripts to patch the Tapped Out APK with new server URLs. All credit to tehfens for the original `patch_native.py` script.
+This document provides instructions for two different scripts to patch the Tapped Out APK with new server URLs. 
 
 ---
 
