@@ -4,11 +4,29 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import sys
 import shutil
+import hashlib
+import urllib.parse
+
+import platform
+
+# pip install request
+import requests 
+
+is_windows = platform.system().lower() == "windows"
 
 def download_file(url, dest):
     """Download a file from the specified URL to the destination path."""
     try:
-        subprocess.run(["curl", "-Lo", dest, url], check=True)
+        req = requests.get(url)
+        if req.status_code != 200:
+          messagebox.showerror(
+            "Download Error",
+            f"Failed to download {url}. Status code = {req.status_code}"
+          )
+          sys.exit(1)
+        with open(dest, "wb") as f:
+          f.write(req.content)
+
     except Exception as e:
         messagebox.showerror("Download Error", f"Failed to download {url}: {e}")
         sys.exit(1)
@@ -17,14 +35,13 @@ def check_dependencies():
     """Check if all required dependencies are installed."""
     missing = []
 
-    if not shutil.which("curl"):
-        missing.append("cURL")
     if not shutil.which("java"):
         missing.append("Java (OpenJDK)")
-    if not shutil.which("python3"):
+    if not shutil.which("python3") and not shutil.which("python"):
         missing.append("Python3")
-    if not shutil.which("r2"):
-        missing.append("radare2")
+    # We no longer rely on radare2 for patching:
+    # if not shutil.which("r2"):
+    #     missing.append("radare2")
 
     if missing:
         # Inform the user about missing dependencies
@@ -48,18 +65,9 @@ def check_dependencies():
 def install_dependencies():
     """Install all necessary dependencies for the APK patching process."""
     # Check for Python (should already be running with Python)
-    if not shutil.which("python3"):
+    if not shutil.which("python3") and not shutil.which("python"):
         messagebox.showerror("Dependency Error", "Python is not installed. Please install it and re-run the application.")
         sys.exit(1)
-
-    # Ensure cURL is available
-    if not shutil.which("curl"):
-        messagebox.showinfo("Dependency Info", "Installing cURL (Linux only)...")
-        if sys.platform == "win32":
-            messagebox.showerror("Dependency Error", "cURL is not available. Please install it manually.")
-            sys.exit(1)
-        else:
-            subprocess.run(["sudo", "apt-get", "install", "-y", "curl"], check=True)
 
     # Install OpenJDK
     if not shutil.which("java"):
@@ -106,27 +114,13 @@ def install_dependencies():
         subprocess.run([sys.executable, "-m", "venv", "venv"], check=True)
 
     # Install Python dependencies
-    #subprocess.run([pip_path, "install", "--upgrade", "pip"], check=True) this seems to need admin roles
+    # subprocess.run([pip_path, "install", "--upgrade", "pip"], check=True)  # might need admin role; skip by default
 
     subprocess.run([pip_path, "install", "buildapp"], check=True)
-    subprocess.run([pip_path, "install", "r2pipe"], check=True)
+    # We no longer need r2pipe since we are not using radare2
+    # subprocess.run([pip_path, "install", "r2pipe"], check=True)
     buildapp_fetch_tools = "venv\\Scripts\\buildapp_fetch_tools" if sys.platform == "win32" else "venv/bin/buildapp_fetch_tools"
     subprocess.run([buildapp_fetch_tools], check=True)
-
-def configure_r2():
-    """Download and install radare2."""
-    if not shutil.which("r2"):
-        try:
-            if sys.platform != "win32":
-                subprocess.run(["sudo", "apt-get", "install", "-y", "radare2"], check=True)
-            else:
-                messagebox.showinfo("Dependency Info", "Please install radare2 manually on Windows.")
-                sys.exit(1)
-        except Exception as e:
-            messagebox.showerror("Install Error", f"Failed to install radare2: {e}")
-            sys.exit(1)
-            
-
 
 def decompile_app(input_filename):
     """Decompile the APK file."""
@@ -134,15 +128,16 @@ def decompile_app(input_filename):
         "java", "-jar", "apktool_2.10.0.jar", "d", input_filename, "-o", "tappedout"
     ], check=True)
 
-import os
+def replace_and_log_urls(new_gameserver_url, new_dlcserver_url, new_url, buffer_size, string_size):
+    """
+    Replace server URLs in the decompiled APK and log only the replacements.
 
-def replace_and_log_urls(new_gameserver_url, new_dlcserver_url):
-    """Replace server URLs in the decompiled APK and log only the replacements."""
-    
+    This primarily modifies text-based files (.smali, .xml, .txt).
+    It does NOT handle binary .so patching.
+    """
     replacements = {
         "https://prod.simpsons-ea.com": new_gameserver_url,
-        "https://syn-dir.sn.eamobile.com": new_gameserver_url,
-        "https://oct2018-4-35-0-uam5h44a.tstodlc.eamobile.com/netstorage/gameasset/direct/simpsons/": new_dlcserver_url
+        "https://syn-dir.sn.eamobile.com": new_gameserver_url,  # Director uses same as gameserver
     }
 
     log = []  # Store logs of replacements
@@ -150,8 +145,8 @@ def replace_and_log_urls(new_gameserver_url, new_dlcserver_url):
     for root, _, files in os.walk("./tappedout/"):
         for file in files:
             file_path = os.path.join(root, file)
-            
-            # Only process text files
+
+            # Only process text-like files
             if file_path.endswith((".xml", ".smali", ".txt")):
                 try:
                     with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
@@ -163,9 +158,7 @@ def replace_and_log_urls(new_gameserver_url, new_dlcserver_url):
                 modified = False
                 for original, replacement in replacements.items():
                     if original in content:
-                        # Log the replacement
                         log.append(f"Replaced '{original}' with '{replacement}' in {file_path}")
-                        # Replace the URL
                         content = content.replace(original, replacement)
                         modified = True
 
@@ -176,9 +169,107 @@ def replace_and_log_urls(new_gameserver_url, new_dlcserver_url):
                     except Exception as e:
                         print(f"Failed to write to file: {file_path}, Error: {e}")
 
-    # Print the log
+    # Print the log to console (and you could optionally save it somewhere)
     print("\n".join(log))
 
+
+def patch_url(file_bytes: bytearray, new_url: str) -> bytearray:
+    """
+    Replace the known DLC URL string in the .so file with 'new_url'.
+    The .so references "http://oct2018-4-35-0-uam5h44a.tstodlc.eamobile.com/netstorage/gameasset/direct/simpsons/".
+
+    The patching logic tries to keep the exact same buffer size to avoid
+    messing up alignment. If the new URL is shorter, we fill leftover space
+    with ./ to maintain length (as demonstrated in the reference script).
+    """
+    
+        # enforce trailing slash
+    if new_url[-1] != "/":
+      new_url += "/"
+    
+    # append "static/" to the url if it isn't there. This is hacky but it works.
+    if new_url[-7:] != "static/":
+      new_url += "static/"
+      
+
+    # Find the original DLC URL string in the file
+    original_bytes = b"http://oct2018-4-35-0-uam5h44a.tstodlc.eamobile.com/netstorage/gameasset/direct/simpsons/"
+    offset = file_bytes.find(original_bytes)
+    if offset < 0:
+        # If not found, return None or raise an error
+        print("Unable to find the DLC URL string in this file. Skipping patch.")
+        return None
+
+    # For reference, the original string length
+    original_len = len(original_bytes)
+    # Prepare your new URL
+    # We'll adopt the technique used in the reference script to keep the same total length
+    url_obj = urllib.parse.urlparse(new_url)
+    # left_size = scheme:// + netloc
+    left_size = len(url_obj.scheme) + 3 + len(url_obj.netloc)
+    right_size = len(url_obj.path)
+    # 1 is for the slash in between
+    difference = original_len - left_size - right_size - 1
+
+    # We'll fill leftover space with "./"
+    path_modifier = "/" + "./" * (difference // 2)
+    # If an odd leftover remains, append one more slash or dot
+    leftover = difference - len(path_modifier) + 1
+    if leftover == 1:
+        path_modifier += "/"
+
+    # Construct the new URL
+    # e.g.  new_url = scheme://netloc + path_modifier + path
+    new_url_full = url_obj._replace(path = path_modifier + url_obj.path).geturl()
+
+    # Overwrite the original string with our new URL
+    idx = offset
+    for c in new_url_full:
+        file_bytes[idx] = ord(c)
+        idx += 1
+    # Null-terminate
+    file_bytes[idx] = 0
+
+    print(f"Patched DLC URL in .so to: {new_url_full}")
+    return file_bytes
+
+def perform_binary_patching(decompiled_path, new_dlcserver_url):
+    """
+    Perform direct binary patching on the .so files by overwriting the DLC URL.
+    This approach does NOT rely on radare2. It locates the known original
+    DLC string and replaces it with the user-provided new_dlcserver_url.
+    """
+
+    # List out all the known scorpio .so variants
+    so_files = [
+        "lib/armeabi-v7a/libscorpio.so",
+        "lib/armeabi-v7a/libscorpio-neon.so",
+        "lib/arm64-v8a/libscorpio.so",
+        "lib/arm64-v8a/libscorpio-neon.so",
+    ]
+
+    for rel_path in so_files:
+        file_path = os.path.join(decompiled_path, rel_path)
+        if not os.path.isfile(file_path):
+            print(f"[INFO] File not found: {file_path}. Skipping.")
+            continue
+
+        print(f"[INFO] Found {rel_path}, attempting patch ...")
+
+        try:
+            with open(file_path, "rb") as src:
+                data = bytearray(src.read())
+
+            patched_data = patch_url(data, new_dlcserver_url)
+            if patched_data:
+                with open(file_path, "wb") as dst:
+                    dst.write(patched_data)
+                print(f"[SUCCESS] Patched {rel_path}.")
+            else:
+                print(f"[WARNING] Could not patch {rel_path}. The original DLC string was not found.")
+
+        except Exception as e:
+            print(f"[ERROR] Could not patch {file_path}: {e}")
 
 def recompile_app(input_filename):
     """Recompile the patched APK."""
@@ -192,17 +283,37 @@ def recompile_app(input_filename):
 def process_apk(input_filename, new_gameserver_url, new_dlcserver_url):
     try:
         progress_bar.start()
-        install_dependencies()  # Install all necessary dependencies
-        decompile_app(input_filename)  # Decompile the APK
-        replace_and_log_urls(new_gameserver_url, new_dlcserver_url)  # Replace URLs and log them
-        output_filename = recompile_app(input_filename)  # Recompile APK
+        
+        os.environ['SOURCE_OUTPUT'] = "./tappedout"
+        os.environ['APK_FILE'] = input_filename
+        os.environ['DLC_URL'] = new_dlcserver_url
+        os.environ['GAMESERVER_URL'] = new_gameserver_url
+        os.environ['DIRECTOR_URL'] = new_gameserver_url
+        
+        # 1) Install dependencies
+        install_dependencies()
+
+        # 2) Decompile the APK
+        decompile_app(input_filename)
+
+        # 3) Replace text-based references (gameserver, director, etc.):
+        new_url = new_dlcserver_url
+        buffer_size = hex(len(new_url) + 1)
+        string_size = hex(len(new_url))
+        replace_and_log_urls(new_gameserver_url, new_dlcserver_url, new_url, buffer_size, string_size)
+
+        # 4) Perform direct binary patching on .so files for the DLC URL
+        perform_binary_patching("./tappedout", new_dlcserver_url)
+
+        # 5) Recompile the patched APK
+        output_filename = recompile_app(input_filename)
+
         messagebox.showinfo("Success", f"Patched APK created: {output_filename}")
     except FileNotFoundError as e:
         messagebox.showerror("Dependency Error", str(e))
     except subprocess.CalledProcessError as e:
         messagebox.showerror("Error", f"An error occurred: {e}")
         progress_bar.stop()
-
 
 def browse_file():
     file_path = filedialog.askopenfilename(filetypes=[("APK files", "*.apk")])
@@ -212,15 +323,25 @@ def browse_file():
 def run_script():
     input_filename = apk_entry.get()
     new_gameserver_url = gameserver_entry.get()
+    new_director_url = gameserver_entry.get()  # same as gameserver for this script
     new_dlcserver_url = dlcserver_entry.get()
 
     if not input_filename or not new_gameserver_url or not new_dlcserver_url:
         messagebox.showerror("Error", "All fields are required!")
         return
 
+    # Ensure DLC URL format ends with a slash
+    if not new_dlcserver_url.endswith('/'):
+        new_dlcserver_url += '/'
+        dlcserver_entry.delete(0, tk.END)
+        dlcserver_entry.insert(0, new_dlcserver_url)
+
     process_apk(input_filename, new_gameserver_url, new_dlcserver_url)
 
-# Create GUI
+
+# ---------------------------
+#         GUI Section
+# ---------------------------
 root = tk.Tk()
 root.title("APK Patcher")
 
@@ -232,7 +353,6 @@ style.configure("TButton", background="#4a4a4a", foreground="#ffffff")
 style.configure("TEntry", fieldbackground="#4a4a4a", foreground="#ffffff")
 style.configure("TFrame", background="#2e2e2e")
 
-# Input fields
 frame = ttk.Frame(root, padding="10")
 frame.pack(fill="both", expand=True)
 
@@ -257,11 +377,9 @@ dlcserver_label.grid(row=2, column=0, sticky="w")
 dlcserver_entry = ttk.Entry(frame, width=50)
 dlcserver_entry.grid(row=2, column=1, columnspan=2, pady=5)
 
-# Progress bar
 progress_bar = ttk.Progressbar(frame, orient="horizontal", mode="determinate")
 progress_bar.grid(row=3, column=0, columnspan=3, pady=10, sticky="ew")
 
-# Buttons
 run_button = ttk.Button(frame, text="Patch APK", command=run_script)
 run_button.grid(row=4, column=0, columnspan=3, pady=5)
 
@@ -273,4 +391,6 @@ footer_label.pack(side="bottom", fill="x", padx=10, pady=5)
 
 root.mainloop()
 
-#coded by @bodnjenie
+# coded by @bodnjenie
+# credit to @tjac for patching logic
+
