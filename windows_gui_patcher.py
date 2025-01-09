@@ -175,62 +175,66 @@ def replace_and_log_urls(new_gameserver_url, new_dlcserver_url, new_url, buffer_
 
 def patch_url(file_bytes: bytearray, new_url: str) -> bytearray:
     """
-    Replace the known DLC URL string in the .so file with 'new_url'.
-    The .so references "http://oct2018-4-35-0-uam5h44a.tstodlc.eamobile.com/netstorage/gameasset/direct/simpsons/".
+    Replace the known DLC URL string in the .so file with 'new_url',
+    **forcing** it to end with '/static/' and keeping the exact same byte-length
+    as the original string.
 
-    The patching logic tries to keep the exact same buffer size to avoid
-    messing up alignment. If the new URL is shorter, we fill leftover space
-    with ./ to maintain length (as demonstrated in the reference script).
+    - If the new URL is shorter, fill leftover space with './' pairs (and a '/' if there's one leftover byte).
+    - If it's longer, either truncate it or raise an error (see the code comment).
     """
-    
-        # enforce trailing slash
-    if new_url[-1] != "/":
-      new_url += "/"
-    
-    # append "static/" to the url if it isn't there. This is hacky but it works.
-    if new_url[-7:] != "static/":
-      new_url += "static/"
-      
 
-    # Find the original DLC URL string in the file
+    # The original DLC URL in the .so
     original_bytes = b"http://oct2018-4-35-0-uam5h44a.tstodlc.eamobile.com/netstorage/gameasset/direct/simpsons/"
     offset = file_bytes.find(original_bytes)
     if offset < 0:
-        # If not found, return None or raise an error
-        print("Unable to find the DLC URL string in this file. Skipping patch.")
+        print("[!] Could not find the DLC URL in this file. Skipping patch.")
         return None
 
-    # For reference, the original string length
+    # The original URL length (often 88 bytes)
     original_len = len(original_bytes)
-    # Prepare your new URL
-    # We'll adopt the technique used in the reference script to keep the same total length
-    url_obj = urllib.parse.urlparse(new_url)
-    # left_size = scheme:// + netloc
-    left_size = len(url_obj.scheme) + 3 + len(url_obj.netloc)
-    right_size = len(url_obj.path)
-    # 1 is for the slash in between
-    difference = original_len - left_size - right_size - 1
 
-    # We'll fill leftover space with "./"
-    path_modifier = "/" + "./" * (difference // 2)
-    # If an odd leftover remains, append one more slash or dot
-    leftover = difference - len(path_modifier) + 1
-    if leftover == 1:
-        path_modifier += "/"
+    # 1) Force the new URL to end with '/static/'
+    #    - Strip any trailing slash, then add '/static/'
+    #    - e.g. "http://example.com" => "http://example.com/static/"
+    #    - e.g. "http://example.com/" => "http://example.com/static/"
+    new_url = new_url.rstrip("/") + "/static/"
 
-    # Construct the new URL
-    # e.g.  new_url = scheme://netloc + path_modifier + path
-    new_url_full = url_obj._replace(path = path_modifier + url_obj.path).geturl()
+    # 2) Convert to bytes
+    new_url_bytes = bytearray(new_url, "utf-8")
+    new_len = len(new_url_bytes)
 
-    # Overwrite the original string with our new URL
-    idx = offset
-    for c in new_url_full:
-        file_bytes[idx] = ord(c)
-        idx += 1
-    # Null-terminate
-    file_bytes[idx] = 0
+    # 3) If new URL is longer than original, truncate or raise an error
+    if new_len > original_len:
+        # Option A: Truncate
+        new_url_bytes = new_url_bytes[:original_len]
 
-    print(f"Patched DLC URL in .so to: {new_url_full}")
+        # Option B: Raise an error instead (comment out the truncate above if you prefer):
+        # raise ValueError(
+        #     f"New URL is {new_len - original_len} bytes too long "
+        #     f"(max {original_len}). Try a shorter URL."
+        # )
+
+    # 4) If new URL is shorter, fill leftover space with './'
+    leftover = original_len - len(new_url_bytes)
+    if leftover > 0:
+        # Add as many './' pairs as will fit
+        pairs_to_add = leftover // 2
+        new_url_bytes.extend(b'./' * pairs_to_add)
+
+        # If there's one leftover byte, add a single slash
+        if leftover % 2 == 1:
+            new_url_bytes.append(ord('/'))
+
+    # 5) Overwrite the original string in the file
+    for i in range(original_len):
+        file_bytes[offset + i] = new_url_bytes[i]
+
+    # (Optional) Null-terminate if you want. Usually not needed if the original ended with '/'
+    # file_bytes[offset + original_len - 1] = 0
+
+    # Just for logging:
+    final_url = new_url_bytes.decode("utf-8", errors="ignore")
+    print(f"[+] Patched DLC URL to: {final_url}")
     return file_bytes
 
 def perform_binary_patching(decompiled_path, new_dlcserver_url):
